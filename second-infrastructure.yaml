@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: |
+  Project 2
+  Deploy a high-availability web app with cloudformation
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Description: Infrastructure name
+    Default: Udagram
+
+  ImageId:
+    Type: String
+    Description: Server Image id for the instance
+    Default: ami-052efd3df9dad4825
+
+  InstanceType:
+    Type: String
+    Description: The server instance type
+    Default: t3.medium
+
+Resources:
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${EnvironmentName} Security Group
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VPC
+
+  S3IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                -  ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: S3GetPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "s3:Get"
+                Resource: "arn:aws:s3:::udacity-devops-cloudformation-project"
+
+  S3InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref S3IAMRole
+  
+  EC2AutoScalingLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install awscli -y
+          apt-get install apache2 -y
+          apt-get install unzip -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udacity-cloudformation-project/UdagramCode.zip .
+          unzip -o UdagramCode.zip
+
+          echo "it works! Udagram, Udacity" > index.html
+      ImageId: !Ref ImageId
+      IamInstanceProfile: !Ref S3InstanceProfile
+      SecurityGroups:
+        - !Ref EC2SecurityGroup
+      InstanceType: !Ref InstanceType
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "10"
+
+  EC2ElasticLoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VPC
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 4
+      Port: 80
+      Protocol: HTTP
+
+  EC2ElasticLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${EnvironmentName} Load Balancer Security Group
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VPC
+
+  EC2ElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      SecurityGroups: 
+        - !Ref EC2ElasticLoadBalancerSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-FirstPublicSubnet
+        - Fn::ImportValue: !Sub ${EnvironmentName}-SecondPublicSubnet
+
+  EC2ElasticLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref EC2ElasticLoadBalancerTargetGroup
+      LoadBalancerArn: !Ref EC2ElasticLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  
+  EC2ElasticLoadBalancerListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref EC2ElasticLoadBalancerTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref EC2ElasticLoadBalancerListener
+      Priority: 1
+
+  EC2AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      TargetGroupARNs:
+        - !Ref EC2ElasticLoadBalancerTargetGroup
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-PrivateSubnets
+      LaunchConfigurationName: !Ref EC2AutoScalingLaunchConfiguration
+      MinSize: 4
+      MaxSize: 4
+
+Outputs:
+  EC2ElasticLoadBalancerURL:
+    Description: The url for the whole Infrastructure setup
+    Value: !Join ["", ["http://", !GetAtt EC2ElasticLoadBalancer.DNSName]]
+    Export:
+      Name: !Sub ${EnvironmentName}-LoadBalancer-Url
+  

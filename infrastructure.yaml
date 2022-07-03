@@ -1,0 +1,427 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: |
+  Project 2
+  Deploy a high-availability web app with cloudformation
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Description: Infrastructure name
+    Default: Udagram
+
+  VpcBlock:
+    Type: String
+    Description: VPC CIDR IP
+    Default: 10.0.0.0/16
+
+  PrivateSubnet1:
+    Type: String
+    Description: Private Subnet for the first AZ
+    Default: 10.0.0.0/24
+
+  PrivateSubnet2:
+    Type: String
+    Description: Private Subnet for the second AZ
+    Default: 10.0.1.0/24
+
+  PublicSubnet1:
+    Type: String
+    Description: Public Subnet for the first AZ
+    Default: 10.0.2.0/24
+
+  PublicSubnet2:
+    Type: String
+    Description: Public Subnet for the second AZ
+    Default: 10.0.3.0/24
+
+  ImageId:
+    Type: String
+    Description: Server Image id for the instance
+    Default: ami-052efd3df9dad4825
+
+  InstanceType:
+    Type: String
+    Description: The server instance type
+    Default: t3.medium
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcBlock
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-InternetGateway
+
+  VPCInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  FirstPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet1
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FirstPrivateSubnet
+
+  SecondPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet2
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-SecondPrivateSubnet
+
+  FirstPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FirstPublicSubnet
+
+  SecondPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-SecondPublicSubnet
+
+  FirstElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCInternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FirstElasticIP
+
+  SecondElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCInternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-SecondElasticIP
+
+  FirstNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref FirstPublicSubnet
+      AllocationId: !GetAtt FirstElasticIP.AllocationId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FirstNatGateway
+
+  SecondNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref SecondPublicSubnet
+      AllocationId: !GetAtt SecondElasticIP.AllocationId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-SecondNatGateway
+
+  FirstPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FirstPrivateRouteTable
+  
+  FirstPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      NatGatewayId: !Ref FirstNatGateway
+      RouteTableId: !Ref FirstPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+
+  FirstPrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FirstPrivateSubnet
+      RouteTableId: !Ref FirstPrivateRouteTable
+      
+  SecondPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-SecondPrivateRouteTable
+
+  SecondPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      NatGatewayId: !Ref SecondNatGateway
+      RouteTableId: !Ref SecondPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCInternetGatewayAttachment
+    Properties:
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+
+
+  FirstPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FirstPublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  SecondPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SecondPublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${EnvironmentName} Security Group
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VPC
+
+  S3IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                -  ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: S3GetPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "s3:Get"
+                Resource: "arn:aws:s3:::udacity-devops-cloudformation-project"
+
+  S3InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref S3IAMRole
+
+  EC2AutoScalingLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install awscli -y
+          apt-get install apache2 -y
+          apt-get install unzip -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udacity-cloudformation-project/UdagramCode.zip .
+          unzip -o UdagramCode.zip
+
+          echo "it works! Udagram, Udacity" > index.html
+      ImageId: !Ref ImageId
+      IamInstanceProfile: !Ref S3InstanceProfile
+      SecurityGroups:
+        - !Ref EC2SecurityGroup
+      InstanceType: !Ref InstanceType
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "10"
+
+  EC2ElasticLoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 10
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 4
+      Port: 80
+      Protocol: HTTP
+
+  EC2ElasticLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${EnvironmentName} Load Balancer Security Group
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VPC
+
+  EC2ElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      SecurityGroups: 
+        - !Ref EC2ElasticLoadBalancerSecurityGroup
+      Subnets:
+        - !Ref FirstPublicSubnet
+        - !Ref SecondPublicSubnet
+
+  EC2ElasticLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref EC2ElasticLoadBalancerTargetGroup
+      LoadBalancerArn: !Ref EC2ElasticLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  EC2ElasticLoadBalancerListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref EC2ElasticLoadBalancerTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref EC2ElasticLoadBalancerListener
+      Priority: 1
+
+  EC2AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      TargetGroupARNs:
+        - !Ref EC2ElasticLoadBalancerTargetGroup
+      VPCZoneIdentifier:
+        - !Join [",", [ !Ref FirstPrivateSubnet, !Ref SecondPrivateSubnet]]
+      LaunchConfigurationName: !Ref EC2AutoScalingLaunchConfiguration
+      MinSize: 4
+      MaxSize: 4
+
+
+Outputs:
+  VPC:
+    Description: The created VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VPC
+  
+  FirstPrivateRouteTable:
+    Description: Created first private route table
+    Value: !Ref FirstPrivateRouteTable
+    Export:
+      Name: !Sub ${EnvironmentName}-FirstPrivateRouteTable
+
+  SecondPrivateRouteTable:
+    Description: Created second private route table
+    Value: !Ref SecondPrivateRouteTable
+    Export:
+      Name: !Sub ${EnvironmentName}-SecondPrivateRouteTable
+
+  PublicRouteTable:
+    Description: Created public route table
+    Value: !Ref PublicRouteTable
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicRouteTable
+  
+  FirstPrivateSubnet:
+    Description: Created first private subnet
+    Value: !Ref FirstPrivateSubnet
+    Export:
+      Name: !Sub ${EnvironmentName}-FirstPrivateSubnet
+
+  SecondPrivateSubnet:
+    Description: Created second private subnet
+    Value: !Ref SecondPrivateSubnet
+    Export:
+      Name: !Sub ${EnvironmentName}-SecondPrivateSubnet
+
+  FirstPublicSubnet:
+    Description: Created first public subnet
+    Value: !Ref FirstPublicSubnet
+    Export:
+      Name: !Sub ${EnvironmentName}-FirstPublicSubnet
+
+  SecondPublicSubnet:
+    Description: Created second public subnet
+    Value: !Ref SecondPublicSubnet
+    Export:
+      Name: !Sub ${EnvironmentName}-SecondPublicSubnet
+
+  PrivateSubnets:
+    Description: List private subnets
+    Value: !Join [",", [ !Ref FirstPrivateSubnet, !Ref SecondPrivateSubnet]]
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateSubnets
+
+  PublicSubnets:
+    Description: List public subnets
+    Value: !Join [",", [ !Ref FirstPublicSubnet, !Ref SecondPublicSubnet]]
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnets
+
+  EC2ElasticLoadBalancerURL:
+    Description: The url for the whole Infrastructure setup
+    Value: !Join ["", ["http://", !GetAtt EC2ElasticLoadBalancer.DNSName]]
+    Export:
+      Name: !Sub ${EnvironmentName}-LoadBalancer-Url
+
